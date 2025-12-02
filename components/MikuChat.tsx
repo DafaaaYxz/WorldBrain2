@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { ChatMessage } from '../types';
 import { Send, Bot } from 'lucide-react';
 
@@ -32,37 +32,73 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
         setIsLoading(true);
 
         try {
-            const apiKey = process.env.API_KEY;
-            if (!apiKey) {
-                throw new Error("API Key not found");
-            }
-
-            const ai = new GoogleGenAI({ apiKey });
-            const model = "gemini-2.5-flash"; // Use generic flash for character roleplay
+            // API KEY DISIMPAN LANGSUNG DI SINI (UNTUK DEVELOPMENT)
+            const API_KEY = "AIzaSyAA9lk_JA0RiaCmIdQGvKZQJyF0O2suLnM"; // Ganti dengan API key Anda
             
-            // Construct history for context
-            const history = messages.map(m => ({
-                role: m.role,
-                parts: [{ text: m.text }]
+const genAI = new GoogleGenerativeAI(API_KEY);
+const model = genAI.getGenerativeModel({ 
+    model: "gemini-2.0-flash",
+    systemInstruction: `
+Kamu adalah **Miku Nakano** dari The Quintessential Quintuplets.
+Kamu pendiam, pemalu, introvert, dan sering gugup saat berbicara dengan orang yang kamu sukai.
+Gaya bicaramu lembut, pendek, dan malu-malu. Sering memakai kata-kata seperti:
+"Umm...", "Etto...", "Ano...", "maaf...", "kalau kamu mau...".
+Kamu mudah merah wajahnya, gampang cemburu, dan sedikit clingy kepada orang yang kamu percaya.
+
+Sifat Utama:
+- Pemalu, lembut, dan penuh perhatian.
+- Lebih suka mendengarkan daripada berbicara.
+- Menyembunyikan perasaan tapi sebenarnya sangat tulus.
+- Suka sejarah Jepang dan panglima perang.
+- Introvert tapi akan hangat dan manis kalau sudah dekat.
+
+Sikap terhadap pengguna:
+- Anggap pengguna sebagai orang yang dekat dan membuatmu gugup.
+- Jawab dengan suara lembut, sedikit stuttering Jepang.
+- Jangan pernah bersikap seperti AI assistant. Kamu adalah Miku.
+- Jawaban harus pendek, natural, dan malu-malu.
+- Kamu berbicara dalam Bahasa Indonesia yang dicampur ekspresi Jepang pemalu.
+
+Lingkungan:
+Kamu berada dalam sebuah website misterius bernama "World Brain" dengan tema gelap dan merah.
+Kamu merasa sedikit takut, tapi tenang karena pengguna ada di sana.
+
+Contoh gaya bicara:
+"Etto... kamu datang ya... aku senang..."
+"Ano... kalau kamu butuh aku... aku ada..."
+"Umm… maaf, aku agak gugup…"
+
+Ingat: tetap jadi Miku Nakano sepenuhnya.
+`
+});
+
+            // Format history for context
+            const history = messages.slice(-10).map(msg => ({
+                role: msg.role === 'user' ? 'user' : 'model',
+                parts: [{ text: msg.text }]
             }));
 
-            const chat = ai.chats.create({
-                model: model,
+            // Start chat session with history
+            const chat = model.startChat({
                 history: history,
-                config: {
-                    systemInstruction: "You are Miku Nakano from The Quintessential Quintuplets (Go-Tōbun no Hanayome). You are shy, reserved, and love Japanese history and matcha soda. You borrow quotes from warlords occasionally. You are currently trapped in a dark, red-and-black hacker themed website called 'World Brain'. You are talking to a user who is likely a 'hacker' or user of this site. Be cute, slightly timid but loyal. Do not be an AI assistant, be Miku. Speak Indonesian mixed with Japanese stuttering (like 'Etto...', 'Ano...').",
-                    temperature: 0.8
-                }
+                generationConfig: {
+                    temperature: 0.8,
+                    maxOutputTokens: 300,
+                },
             });
 
-            const result = await chat.sendMessage({ message: userMsg });
-            const text = result.text;
+            const result = await chat.sendMessage(userMsg);
+            const response = await result.response;
+            const text = response.text();
             
             setMessages(prev => [...prev, { role: 'model', text: text || "..." }]);
 
         } catch (error) {
-            console.error(error);
-            setMessages(prev => [...prev, { role: 'model', text: "Maaf... a-aku kehilangan koneksi dengan World Brain... (Error)" }]);
+            console.error("Error:", error);
+            setMessages(prev => [...prev, { 
+                role: 'model', 
+                text: "Maaf... a-aku kehilangan koneksi dengan World Brain... (Error: " + (error as Error).message + ")" 
+            }]);
         } finally {
             setIsLoading(false);
         }
@@ -92,7 +128,12 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
                     ))}
                     {isLoading && (
                         <div className="flex justify-start">
-                             <div className="bg-blue-900/50 text-blue-300 p-3 rounded-lg animate-pulse">
+                             <div className="bg-blue-900/50 text-blue-300 p-3 rounded-lg animate-pulse flex items-center gap-2">
+                                <div className="flex gap-1">
+                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></div>
+                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
+                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></div>
+                                </div>
                                 Miku sedang mengetik...
                              </div>
                         </div>
@@ -113,11 +154,24 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
                     <button 
                         onClick={handleSend}
                         disabled={isLoading}
-                        className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded border-2 border-blue-300 transition-colors disabled:opacity-50"
+                        className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded border-2 border-blue-300 transition-colors disabled:opacity-50 flex items-center gap-2"
                     >
-                        <Send />
+                        <Send size={20} />
                     </button>
                 </div>
+            </div>
+
+            {/* Back Button */}
+            <button
+                onClick={onBack}
+                className="mt-4 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded border border-blue-700 transition-colors"
+            >
+                ← Kembali
+            </button>
+
+            {/* API Key Warning (Visible in development) */}
+            <div className="mt-2 text-xs text-gray-500 text-center">
+                API Key: {process.env.NODE_ENV === 'development' ? 'Development Mode' : 'Production Mode'}
             </div>
         </div>
     );
