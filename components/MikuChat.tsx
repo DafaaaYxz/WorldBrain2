@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { ChatMessage } from '../types';
-import { Send, Bot, Key, Settings, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { Send, Bot, Key, Settings, AlertTriangle, CheckCircle2, XCircle, Save } from 'lucide-react';
 
 interface MikuChatProps {
     onBack: () => void;
@@ -15,6 +15,7 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [isKeySet, setIsKeySet] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [manualKey, setManualKey] = useState('');
     
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -27,16 +28,40 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
     }, [messages]);
 
     useEffect(() => {
-        checkApiKey();
+        // Check for locally saved key first
+        const savedKey = localStorage.getItem('MIKU_NEURAL_KEY');
+        if (savedKey) {
+            setManualKey(savedKey);
+            setIsKeySet(true);
+        } else {
+            checkApiKey();
+        }
     }, []);
 
     const checkApiKey = async () => {
+        // Check env var
+        if (process.env.API_KEY) {
+            setIsKeySet(true);
+            return;
+        }
+        
+        // Check AI Studio wrapper
         if ((window as any).aistudio) {
             const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-            setIsKeySet(hasKey);
+            if (hasKey) {
+                setIsKeySet(true);
+            }
+        }
+    };
+
+    const handleManualSave = () => {
+        if (manualKey.trim().length > 0) {
+            localStorage.setItem('MIKU_NEURAL_KEY', manualKey.trim());
+            setIsKeySet(true);
+            alert("NEURAL KEY SAVED LOCALLY.");
         } else {
-            // Fallback for local dev
-            setIsKeySet(!!process.env.API_KEY);
+            localStorage.removeItem('MIKU_NEURAL_KEY');
+            setIsKeySet(false);
         }
     };
 
@@ -44,20 +69,16 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
         if ((window as any).aistudio) {
             try {
                 await (window as any).aistudio.openSelectKey();
-                // Assume success if user completes flow, verify again
                 await checkApiKey();
             } catch (error) {
                 console.error("Key selection failed", error);
             }
-        } else {
-            alert("Sistem API Key manual tidak tersedia di lingkungan ini. Gunakan process.env.API_KEY.");
         }
     };
 
     const handleSend = async () => {
         if (!input.trim() || isLoading) return;
 
-        // Force check key before sending
         if (!isKeySet) {
             setShowSettings(true);
             return;
@@ -69,8 +90,18 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
         setIsLoading(true);
 
         try {
-            // Re-instantiate to ensure we get the latest key from the environment/storage
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            // Priority: Manual Key -> Environment Key
+            const apiKey = manualKey || process.env.API_KEY;
+            
+            if (!apiKey && !(window as any).aistudio) {
+                throw new Error("No API Key available");
+            }
+
+            // Note: If using window.aistudio selected key, we might need a specific handling
+            // but for this implementation we assume if manualKey is missing, we try standard init.
+            // If the environment is injected correctly by the platform, process.env.API_KEY works.
+            
+            const ai = new GoogleGenAI({ apiKey: apiKey || process.env.API_KEY });
             const model = "gemini-2.5-flash"; 
             
             const history = messages.map(m => ({
@@ -95,9 +126,8 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
         } catch (error) {
             console.error(error);
             setMessages(prev => [...prev, { role: 'model', text: "Maaf... a-aku kehilangan koneksi dengan World Brain... (Periksa API Key mu!)" }]);
-            // If error is related to auth, prompt settings
             if (String(error).includes("API key") || String(error).includes("403")) {
-                setIsKeySet(false);
+                // Don't auto-unset key if it's manual, just warn
                 setShowSettings(true);
             }
         } finally {
@@ -152,16 +182,36 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
                                 </div>
                             </div>
 
-                            <p className="text-gray-400 text-xs mb-4 leading-relaxed">
-                                Untuk mengaktifkan Miku, World Brain membutuhkan akses Neural Link (Google Gemini API Key).
-                                Pastikan Key berasal dari project yang memiliki billing aktif.
+                            <div className="mb-6">
+                                <label className="text-blue-200 font-bold mb-2 text-sm font-['Consolas'] block">MANUAL OVERRIDE (PASTE KEY):</label>
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="password" 
+                                        value={manualKey}
+                                        onChange={(e) => setManualKey(e.target.value)}
+                                        placeholder="AIzaSy..."
+                                        className="flex-1 bg-black border border-blue-500 text-white p-2 text-sm rounded focus:outline-none focus:shadow-[0_0_10px_#00f]"
+                                    />
+                                    <button 
+                                        onClick={handleManualSave}
+                                        className="bg-blue-800 text-white p-2 rounded border border-blue-500 hover:bg-blue-700"
+                                        title="Save to Local Storage"
+                                    >
+                                        <Save size={18} />
+                                    </button>
+                                </div>
+                                <p className="text-gray-500 text-xs mt-1">Key disimpan di browser Anda.</p>
+                            </div>
+
+                            <p className="text-gray-400 text-xs mb-4 leading-relaxed border-t border-gray-800 pt-4">
+                                Jika tidak memiliki key manual, gunakan selektor otomatis (Perlu koneksi Google Account):
                             </p>
 
                             <button 
                                 onClick={handleConfigureKey}
-                                className="w-full bg-blue-700 hover:bg-blue-600 text-white font-bold py-4 border-2 border-blue-400 shadow-[0_0_15px_#00f] transition-all flex items-center justify-center gap-2 mb-4"
+                                className="w-full bg-gray-900 hover:bg-gray-800 text-gray-300 font-bold py-3 border border-gray-600 transition-all flex items-center justify-center gap-2 mb-4 text-sm"
                             >
-                                {isKeySet ? 'GANTI NEURAL KEY' : 'PASANG NEURAL KEY'}
+                                USE GOOGLE SELECTOR
                             </button>
 
                             <a 
@@ -182,7 +232,7 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
                         <AlertTriangle className="w-16 h-16 text-red-500 mb-4 animate-bounce" />
                         <h2 className="text-2xl font-['Press_Start_2P'] text-red-500 mb-4">ACCESS DENIED</h2>
                         <p className="text-white font-['Consolas'] mb-8 max-w-md">
-                            Modul Miku Nakano memerlukan Neural Link Key untuk beroperasi. Sistem tidak mendeteksi kredensial aktif.
+                            Modul Miku Nakano memerlukan Neural Link Key untuk beroperasi. Masukkan Key secara manual di pengaturan.
                         </p>
                         <button 
                             onClick={() => setShowSettings(true)}
