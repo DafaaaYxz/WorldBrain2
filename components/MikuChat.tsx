@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { ChatMessage } from '../types';
-import { Send, Bot, Key, Settings, AlertTriangle, CheckCircle2, XCircle, Save } from 'lucide-react';
+import { Send, Bot, Key, Settings, AlertTriangle, CheckCircle2, XCircle, Save, Repeat } from 'lucide-react';
 
 interface MikuChatProps {
     onBack: () => void;
@@ -58,7 +58,7 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
         if (manualKey.trim().length > 0) {
             localStorage.setItem('MIKU_NEURAL_KEY', manualKey.trim());
             setIsKeySet(true);
-            alert("NEURAL KEY SAVED LOCALLY.");
+            alert("NEURAL KEYS SAVED LOCALLY.");
         } else {
             localStorage.removeItem('MIKU_NEURAL_KEY');
             setIsKeySet(false);
@@ -89,50 +89,76 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
         setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
         setIsLoading(true);
 
-        try {
-            // Priority: Manual Key -> Environment Key
-            const apiKey = manualKey || process.env.API_KEY;
-            
-            if (!apiKey && !(window as any).aistudio) {
-                throw new Error("No API Key available");
-            }
-
-            // Note: If using window.aistudio selected key, we might need a specific handling
-            // but for this implementation we assume if manualKey is missing, we try standard init.
-            // If the environment is injected correctly by the platform, process.env.API_KEY works.
-            
-            const ai = new GoogleGenAI({ apiKey: apiKey || process.env.API_KEY });
-            const model = "gemini-2.5-flash"; 
-            
-            const history = messages.map(m => ({
-                role: m.role,
-                parts: [{ text: m.text }]
-            }));
-
-            const chat = ai.chats.create({
-                model: model,
-                history: history,
-                config: {
-                    systemInstruction: "You are Miku Nakano from The Quintessential Quintuplets (Go-Tōbun no Hanayome). You are shy, reserved, and love Japanese history and matcha soda. You borrow quotes from warlords occasionally. You are currently trapped in a dark, red-and-black hacker themed website called 'World Brain'. You are talking to a user who is likely a 'hacker' or user of this site. Be cute, slightly timid but loyal. Do not be an AI assistant, be Miku. Speak Indonesian mixed with Japanese stuttering (like 'Etto...', 'Ano...').",
-                    temperature: 0.8
-                }
-            });
-
-            const result = await chat.sendMessage({ message: userMsg });
-            const text = result.text;
-            
-            setMessages(prev => [...prev, { role: 'model', text: text || "..." }]);
-
-        } catch (error) {
-            console.error(error);
-            setMessages(prev => [...prev, { role: 'model', text: "Maaf... a-aku kehilangan koneksi dengan World Brain... (Periksa API Key mu!)" }]);
-            if (String(error).includes("API key") || String(error).includes("403")) {
-                // Don't auto-unset key if it's manual, just warn
-                setShowSettings(true);
-            }
-        } finally {
-            setIsLoading(false);
+        // 1. Parse Keys (Supports Multiple Keys separated by newline, comma, space)
+        let keyList: string[] = [];
+        if (manualKey.trim()) {
+            keyList = manualKey.split(/[\n, ]+/).map(k => k.trim()).filter(k => k.length > 0);
         }
+
+        // If no manual keys, fallback to env
+        if (keyList.length === 0 && process.env.API_KEY) {
+            keyList.push(process.env.API_KEY);
+        }
+
+        // 2. Prepare Chat Context
+        const history = messages.map(m => ({
+            role: m.role,
+            parts: [{ text: m.text }]
+        }));
+
+        const systemInstruction = "You are Miku Nakano from The Quintessential Quintuplets (Go-Tōbun no Hanayome). You are shy, reserved, and love Japanese history and matcha soda. You borrow quotes from warlords occasionally. You are currently trapped in a dark, red-and-black hacker themed website called 'World Brain'. You are talking to a user who is likely a 'hacker' or user of this site. Be cute, slightly timid but loyal. Do not be an AI assistant, be Miku. Speak Indonesian mixed with Japanese stuttering (like 'Etto...', 'Ano...').";
+
+        let success = false;
+        let responseText = "";
+
+        // 3. Execution Loop (Auto-Switching)
+        if (keyList.length > 0) {
+            for (const [index, apiKey] of keyList.entries()) {
+                try {
+                    const ai = new GoogleGenAI({ apiKey });
+                    const chat = ai.chats.create({
+                        model: "gemini-2.5-flash",
+                        history: history,
+                        config: {
+                            systemInstruction: systemInstruction,
+                            temperature: 0.8
+                        }
+                    });
+
+                    const result = await chat.sendMessage({ message: userMsg });
+                    responseText = result.text;
+                    success = true;
+                    // If success, break loop immediately
+                    break; 
+                } catch (error) {
+                    console.warn(`[NEURAL LINK FAIL] Key #${index + 1} (${apiKey.slice(0,5)}...) died. Switching to backup...`, error);
+                    // Continue loop to next key
+                }
+            }
+        } else {
+             // Fallback logic for when no keys are explicitly parsed (rare case if isKeySet is true)
+             // Tries to rely on default environment behavior
+             try {
+                 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+                 const chat = ai.chats.create({
+                     model: "gemini-2.5-flash",
+                     history: history,
+                     config: { systemInstruction, temperature: 0.8 }
+                 });
+                 const result = await chat.sendMessage({ message: userMsg });
+                 responseText = result.text;
+                 success = true;
+             } catch(e) { console.error("Fallback failed", e); }
+        }
+
+        if (success) {
+            setMessages(prev => [...prev, { role: 'model', text: responseText }]);
+        } else {
+            setMessages(prev => [...prev, { role: 'model', text: "⚠️ SYSTEM CRASH: SEMUA API KEY GAGAL / LIMIT HABIS. Masukkan key cadangan di pengaturan." }]);
+            setShowSettings(true);
+        }
+
+        setIsLoading(false);
     };
 
     return (
@@ -159,8 +185,8 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
                 
                 {/* Settings Overlay / Modal */}
                 {showSettings && (
-                    <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4">
-                        <div className="bg-[#050010] border-2 border-blue-400 p-6 max-w-md w-full shadow-[0_0_50px_rgba(0,0,255,0.3)] relative">
+                    <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-sm flex items-center justify-center p-4">
+                        <div className="bg-[#050010] border-2 border-blue-400 p-6 max-w-md w-full shadow-[0_0_50px_rgba(0,0,255,0.3)] relative flex flex-col max-h-full">
                             <button 
                                 onClick={() => setShowSettings(false)}
                                 className="absolute top-2 right-2 text-blue-500 hover:text-white"
@@ -182,29 +208,33 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
                                 </div>
                             </div>
 
-                            <div className="mb-6">
-                                <label className="text-blue-200 font-bold mb-2 text-sm font-['Consolas'] block">MANUAL OVERRIDE (PASTE KEY):</label>
-                                <div className="flex gap-2">
-                                    <input 
-                                        type="password" 
+                            <div className="mb-6 flex-1">
+                                <label className="text-blue-200 font-bold mb-2 text-sm font-['Consolas'] flex items-center justify-between">
+                                    <span>MANUAL OVERRIDE KEYS:</span>
+                                    <span className="text-[10px] text-green-400 flex items-center gap-1"><Repeat size={10}/> AUTO-ROTATION ENABLED</span>
+                                </label>
+                                <div className="flex flex-col gap-2">
+                                    <textarea 
                                         value={manualKey}
                                         onChange={(e) => setManualKey(e.target.value)}
-                                        placeholder="AIzaSy..."
-                                        className="flex-1 bg-black border border-blue-500 text-white p-2 text-sm rounded focus:outline-none focus:shadow-[0_0_10px_#00f]"
+                                        placeholder="Paste API Key di sini...&#10;Paste API Key kedua di baris baru...&#10;(Sistem akan otomatis ganti key jika yang pertama mati)"
+                                        className="w-full h-32 bg-black border border-blue-500 text-white p-3 text-xs md:text-sm rounded focus:outline-none focus:shadow-[0_0_15px_#00f] resize-none font-mono leading-relaxed"
                                     />
                                     <button 
                                         onClick={handleManualSave}
-                                        className="bg-blue-800 text-white p-2 rounded border border-blue-500 hover:bg-blue-700"
+                                        className="bg-blue-800 text-white p-3 rounded border border-blue-500 hover:bg-blue-700 flex items-center justify-center gap-2 font-bold text-sm"
                                         title="Save to Local Storage"
                                     >
-                                        <Save size={18} />
+                                        <Save size={18} /> SIMPAN KONFIGURASI
                                     </button>
                                 </div>
-                                <p className="text-gray-500 text-xs mt-1">Key disimpan di browser Anda.</p>
+                                <p className="text-gray-500 text-xs mt-2 italic">
+                                    * Masukkan banyak key untuk cadangan. Jika satu limit habis, key berikutnya akan dipakai.
+                                </p>
                             </div>
 
                             <p className="text-gray-400 text-xs mb-4 leading-relaxed border-t border-gray-800 pt-4">
-                                Jika tidak memiliki key manual, gunakan selektor otomatis (Perlu koneksi Google Account):
+                                Opsi Alternatif (Google Account):
                             </p>
 
                             <button 
@@ -232,7 +262,7 @@ const MikuChat: React.FC<MikuChatProps> = ({ onBack }) => {
                         <AlertTriangle className="w-16 h-16 text-red-500 mb-4 animate-bounce" />
                         <h2 className="text-2xl font-['Press_Start_2P'] text-red-500 mb-4">ACCESS DENIED</h2>
                         <p className="text-white font-['Consolas'] mb-8 max-w-md">
-                            Modul Miku Nakano memerlukan Neural Link Key untuk beroperasi. Masukkan Key secara manual di pengaturan.
+                            Modul Miku Nakano memerlukan Neural Link Key. Masukkan satu atau lebih API Key di pengaturan.
                         </p>
                         <button 
                             onClick={() => setShowSettings(true)}
